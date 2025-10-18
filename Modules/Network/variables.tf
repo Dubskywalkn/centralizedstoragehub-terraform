@@ -1,0 +1,9 @@
+variable "resource_group_name" { type = string}
+variable "location" {type = string}
+variable "vnet_name" {type = string}
+variable "vnet_cidr" {type = string}
+variable "app_subnet" { type = string }
+variable "app_subnet_cidr" { type = string }
+variable "pe_subnet" { type = string }
+variable "pe_subnet_cidr" { type = string }
+variable "ssh_source_address_prefix" { type = string }
