@@ -8,106 +8,52 @@ Centralizes finance documents in **Azure Blob (GZRS)** behind **Private Endpoint
 ## 🧭 Problem → Solution
 
 **Problem:** Finance docs were scattered across QuickBooks/Stripe/email/Drive and laptops → no single source of truth, risky sharing, weak recovery.  
-**Solution:** A private-by-default ingestion backbone: **VM1** ingests on schedule and writes to **Blob** via **Private Endpoint** using **Managed Identity**. **VM2** is **cold standby**. Storage uses **GZRS + Versioning + Soft Delete + Lifecycle**. **VM backups** via Recovery Services Vault. All infra via **Terraform**.
+**Solution:** A private-by-default ingestion backbone: **VM1** ingests on schedule and writes to **Blob** via **Private Endpoint** using **Managed Identity**. **VM2** is **cold standby**. Storage uses **GZRS + Versioning + Soft Delete + Lifecycle**. **VM backups** via **Recovery Services Vault**. All infra via **Terraform**.
 
 ---
 
-## 🏗️ Architecture
+## ✨ Features
 
-```mermaid
-graph LR
-  subgraph Azure
-    subgraph VNet[VNet 10.10.0.0/16]
-      subgraph App[app-subnet 10.10.1.0/24]
-        VM1[VM1 Active<br/>System-assigned MI<br/>Cron ingest]
-        VM2[VM2 Cold Standby (deallocated)]
-      end
-      subgraph PE[pe-subnet 10.10.2.0/24]
-        PEP[(Private Endpoint<br/>blob subresource)]
-      end
-      PDNS[(Private DNS Zone<br/>privatelink.blob.core.windows.net)]
-    end
-    SA[(Storage Account<br/>GZRS | Versioning | Soft Delete | Lifecycle)]
-    RSV[(Recovery Services Vault<br/>Daily VM backups)]
-  end
+- **Security:** private endpoints, public access disabled, least privilege via MI + RBAC  
+- **Reliability:** Availability Set; fast manual failover to cold standby  
+- **Governance:** GZRS, versioning/soft delete, lifecycle to Cool/Archive  
+- **IaC:** modular Terraform (Network, Storage, Private Endpoint, Compute, RBAC, Backup)  
+- **Observability:** simple KQL for heartbeat/ingest errors (Log Analytics)
 
-  Ext[QuickBooks/Stripe/Email/Drive<br/>(Exports/Inputs)] --> VM1
-  VM1 -->|MI over PE| PEP --> SA
-  VM2 -. standby .-> PEP
-  PDNS --- PEP
-  VM1 -. backup .-> RSV
+---
 
+## 📂 Repo layout
 
-
-
-
-
-
-
-
-
-Design choices
-
-Private data plane (PE + PDNS); public access disabled on Storage
-
-Managed Identity + RBAC (least privilege; no keys)
-
-VM1 active; VM2 cold standby in an Availability Set
-
-Storage GZRS, Versioning, Soft Delete, Lifecycle (Cool/Archive)
-
-Recovery Services Vault backs up VMs
-
-
-
-
-
-
-✨ Features
-
-Security: private endpoints, no public blob access, least privilege via MI + RBAC
-
-Reliability: Availability Set; fast manual failover to cold standby
-
-Governance: GZRS, versioning/soft delete, lifecycle policies
-
-IaC: modular Terraform (Network, Storage, PE, Compute, RBAC, Backup)
-
-Observability: simple KQL for heartbeat/ingest errors (Log Analytics)
-
-
-
-📂 Repo layout
 /Modules
-  /Network         # vnet, subnets, NSG
-  /Storage         # GZRS, versioning, soft delete, lifecycle
-  /PrivateEndpoint # blob PE + Private DNS
-  /Compute         # VM1 active, VM2 cold standby, Availability Set, MI
-  /RBAC            # MI -> Blob Data Contributor
-  /Backup          # Recovery Services Vault + policy
+/Network # vnet, subnets, NSG
+/Storage # GZRS, versioning, soft delete, lifecycle
+/PrivateEndpoint # blob PE + Private DNS
+/Compute # VM1 active, VM2 cold standby, Availability Set, MI
+/RBAC # MI -> Storage Blob Data Contributor
+/Backup # Recovery Services Vault + policy
 main.tf
 variables.tf
 outputs.tf
-terraform.tfvars.example   # placeholders only (safe to commit)
+terraform.tfvars.example # placeholders only (safe to commit)
 
+yaml
+Copy code
 
-🔧 Pre-requisites
+---
 
-Terraform ≥ 1.5, AzureRM provider ≥ 3.100
+## 🔧 Pre-requisites
 
-Azure subscription (az login)
+- Terraform ≥ **1.5**, AzureRM provider ≥ **3.100**  
+- Azure subscription (`az login`)  
+- **RSA** public SSH key for the admin user  
+- (Optional) Log Analytics workspace if you wire monitoring
 
-RSA public SSH key for the admin user
+---
 
-(Optional) Log Analytics workspace if you wire monitoring
+## 🚀 Quick start
 
-
-
-
-🚀 Quick start
+```bash
 # 1) clone & cd
-
-
 git clone https://github.com/Dubskywalkn/centralizedstoragehub-terraform.git
 cd centralizedstoragehub-terraform
 
@@ -117,18 +63,18 @@ cp terraform.tfvars.example terraform.tfvars
 # 3) init & deploy
 terraform init
 terraform apply
-
-
 One-time portal step: create containers (keeps bootstrap secure):
 
+Copy code
 qbo, stripe, drive, email, published
-
-
 Then (if using per-container scoping) re-apply RBAC:
 
+bash
+Copy code
 terraform apply -target=module.RBAC_vm1 -target=module.RBAC_vm2
-
 ⚙️ terraform.tfvars.example (edit your copy)
+hcl
+Copy code
 # region/resource group
 resource_group_name       = "rg-ledgerlock"
 location                  = "eastus"
@@ -154,24 +100,20 @@ enable_soft_delete        = true
 
 # security
 ssh_source_address_prefix = "203.0.113.10/32"   # example only (replace locally)
-
-
 Security hygiene: don’t commit your real /32. Keep it in your local terraform.tfvars.
 
 ✅ Verify (smoke tests)
-
 From VM1:
 
-nslookup <storage-account-name>.blob.core.windows.net   # -> 10.x (PE)
+bash
+Copy code
+nslookup <storage-account>.blob.core.windows.net   # -> 10.x (PE)
 az login --identity
-az storage container list --account-name <storage-account-name> --auth-mode login -o table
-
-
+az storage container list --account-name <storage-account> --auth-mode login -o table
 Optionally upload a file using MI (Python/CLI) and confirm it lands in a container.
 From your laptop (after removing your IP from allowlist), Storage Explorer should fail → expected.
 
 🔒 Security notes
-
 Storage: Public network access = Disabled
 
 NSG: inbound 22/tcp from your /32 only; outbound 443 only
@@ -181,25 +123,23 @@ Managed Identity + Storage Blob Data Contributor (account or per-container scope
 Consider RSV private endpoints and set RSV public access = Deny later
 
 🧯 DR & Failover (quick playbook)
-
 Same-region failover (minutes):
 
-Start VM2 (cold standby)
+Start VM2 (cold standby).
 
-Flip internal Private DNS A record (e.g., ingest.internal) to VM2
+Flip internal Private DNS A record (e.g., ingest.internal) to VM2.
 
-Verify MI + blob upload
+Verify MI + blob upload.
 
 Regional incident (hours, rare):
 
-Storage account failover (GZRS)
+Storage account failover (GZRS).
 
-Deploy VNet + PE + PDNS in paired region (Terraform)
+Deploy VNet + PE + PDNS in paired region (Terraform).
 
-Restore VM from Recovery Services Vault
+Restore VM from Recovery Services Vault.
 
 💵 Cost snapshot
-
 VM1 small + disks: tens $/mo; VM2 deallocated ≈ $0 compute
 
 Storage (GZRS): main driver; lifecycle → Cool/Archive cuts cost
@@ -208,22 +148,21 @@ PE/DNS/Backup/Logs: small, predictable
 Annual ballpark: ~$1k–$4k depending on TB stored.
 
 🧪 Monitoring (KQL examples)
-
 VM heartbeat (last 15m)
 
+kusto
+Copy code
 Heartbeat
 | where TimeGenerated > ago(15m)
 | summarize last_seen = max(TimeGenerated) by Computer, Category
-
-
 Simple ingest error markers
 
+kusto
+Copy code
 Syslog
 | where ProcessName in ("CRON","python")
 | where SyslogMessage has_any ("ingest_failed","Traceback")
-
 🛣️ Roadmap (nice-to-haves)
-
 Serverless ingestion (Functions/Container Apps Jobs with VNet) if volume spikes
 
 Second LRS account + object replication + immutability (auditor-driven)
@@ -231,4 +170,3 @@ Second LRS account + object replication + immutability (auditor-driven)
 RSV private endpoints + public access deny
 
 One-click failover (Automation runbook/webhook)
-
